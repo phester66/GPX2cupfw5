@@ -11,12 +11,11 @@ import gpxpy.gpx
 import math
 
 
+
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 from _ast import BitAnd
 
-class RouteWp:
-  pass
 
 class Waypoint:
   def __init__(self, wp):
@@ -24,9 +23,11 @@ class Waypoint:
     self.lat = wp.latitude
     self.long = wp.longitude
     self.desc = wp.description
+    self.ele = wp.elevation
     self.cyl = 400
 
 class Route:
+  """ routeWayPoints is an array of RouteWp which contains name & cyl """
   def __init__(self, name, routeWaypoints):
     self.name = name
     self.routeWaypoints = routeWaypoints
@@ -40,16 +41,16 @@ class Gpsdata(Waypoint, Route):
     self.wps.append(Waypoint(wp))
   
   def addRoute(self, name, defCyl, rtewps):
-    rte = []
+    rte=[]
     for fullwp in rtewps:
-      wp=RouteWp
-      wp.cyl = defCyl
+      wp = {}
+      wp['cyl'] = defCyl
       wpBits=fullwp.split('|')
-      wp.name = wpBits[0]
+      wp['name'] = wpBits[0]
       if len(wpBits) > 1:
-        wp.cyl = wpBits[1]
-      if wp.cyl == '':
-        wp.cyl = 400
+        wp['cyl'] = wpBits[1]
+      if wp['cyl'] == '':
+        wp['cyl'].cyl = 400
       rte.append(wp)
     self.rts.append(Route(name, rte))
   
@@ -76,7 +77,7 @@ class Gpsdata(Waypoint, Route):
       defCyl=None
       print('route is {}'.format(route))
       parts = route.split(';')
-      if len(parts) == 3:
+      if len(parts) == 3 and route[0] != '#':
         name = parts[0]
         if name[0] == '*':
           isComp = True
@@ -103,7 +104,61 @@ class Gpsdata(Waypoint, Route):
     if compAdded == False:
       print('#### Warning - no comp route - first one will be overwritten')
 
+  def writeFw5(self, filename):
+    """ fw5 file is an xml file containing both waypoints and routes combined """
+    nsm = {'xmlns': "http://www.topografix.com/GPX/1/1/",
+         'version': "1.0",
+         'xmlns:xsi': "http://www.w3.org/2001/XMLSchema-instance",
+         'xsi:schemaLocation': "http://www.topografix.com/GPX/1/1/ http://www.topografix.com/GPX/1/1//gpx.xsd",
+         'creator': "FlyChart, Version 4.57, Sep. 1st 2014 - http://www.flytec.ch"}
+    taggpx = ET.Element('gpx', attrib=nsm)
+    for waypoint in self.wps:
+      tagwpt = ET.SubElement(taggpx, 'wpt')
+      tagwpt.attrib['lat'] = str(waypoint.lat)
+      tagwpt.attrib['lon'] = str(waypoint.long)
+      ET.SubElement(tagwpt, 'ele').text=str(waypoint.ele)
+      ET.SubElement(tagwpt, 'name').text=waypoint.name
+      if not waypoint.desc:
+        waypoint.desc = "None"
+      ET.SubElement(tagwpt, 'desc').text=waypoint.name+', '+ waypoint.desc
+      tagext=ET.SubElement(tagwpt, 'extensions')
+      ET.SubElement(tagext, 'radius').text=str(waypoint.cyl)
+    
+    #routes next
+    for route in self.rts:
+      tagrte = ET.SubElement(taggpx, 'rte')
+      ET.SubElement(tagrte, 'name').text = route.name
+      for rtewp in route.routeWaypoints:
+        # find each route waypoint in waypoint list
+        for wp in self.wps:
+          if wp.name.lower() == rtewp['name'].lower():
+            tagrpt = ET.SubElement(tagrte, 'rtept')
+            tagrpt.attrib['lat'] = str(wp.lat)
+            tagrpt.attrib['lon'] = str(wp.long)
+            ET.SubElement(tagrpt, 'ele').text = str(wp.ele)
+            ET.SubElement(tagrpt, 'name').text=wp.name
+            ET.SubElement(tagrpt, 'desc').text=wp.name+', '+ wp.desc
+            tagext=ET.SubElement(tagrpt, 'extensions')
+            ET.SubElement(tagext, 'radius').text = str(rtewp['cyl'])
+            break
 
+
+    reparsed = minidom.parseString(ET.tostring(taggpx,'unicode'))
+    braun = open(filename+'.fw5', 'w')
+    braun.write(reparsed.toprettyxml(indent='  ', newl='\n'))
+    braun.close()
+
+  
+  def writeCup(self, filename):
+    pass
+
+
+  def writeFormats(self, fw5name, cupname):
+    if fw5name and len(fw5name)>0:
+      self.writeFw5(fw5name)
+    if cupname and len(cupname)>0:
+      self.writeCup(cupname)
+    
 
 def AddWaypoints(tagroot, wps):
   for waypoint in wps:
@@ -127,6 +182,7 @@ def AddRoute(tagroot, name, defCyl, waypoints, wps):
       wp = wpBits[0]
       if len(wpBits) > 1:
         cyl = wpBits[1]
+      # for cup
       tagtsk = ET.Element('Task')
       tagtsk.attrib['fai_finish'] = str(0)
       tagtsk.attrib['finish_min_height_ref'] = 'AGL'
@@ -171,7 +227,10 @@ def AddRoutes(tagroot, rtefilename, wps):
     defCyl=None
     print('route is {}'.format(route))
     parts = route.split(';')
-    if len(parts) == 3:
+    print(route + ' parts '+ str(len(parts)))
+    if len(parts) ==3:
+      print('???????????????????? len is '+str(len(parts))+'  item is '+route[0])
+    if len(parts) == 3 and route[0] != '#':
       name = parts[0]
       if name[0] == '*':
         isComp = True
@@ -247,56 +306,56 @@ def WaypointConvert(wps, outfile, rtefilename):
 
 
 def GpxStuff(infile, outfile, rtefile):
-    gpx_file = open(infile, 'r')
-    numTracks = 0
-    numWPts = 0
-    numRtes = 0
-    gpx = gpxpy.parse(gpx_file)
-    gpx_file.close()
-    
-    for track in gpx.tracks:
-      numTracks = numTracks + 1
-      for segment in track.segments:
-        for point in segment.points:
-          print('Point at ({0},{1}) -> {2}'.format(point.latitude, point.longitude, point.elevation))
-    
-    for waypoint in gpx.waypoints:
-      numWPts = numWPts + 1
-      print('waypoint {0} -> ({1},{2}) {3}'.format(waypoint.name, waypoint.latitude, waypoint.longitude, waypoint.description))
-    
-    for route in gpx.routes:
-      print('Route:')
-      numRtes = numRtes + 1
-      for point in route.points:
+  gpx_file = open(infile, 'r')
+  numTracks = 0
+  numWPts = 0
+  numRtes = 0
+  gpx = gpxpy.parse(gpx_file)
+  gpx_file.close()
+  
+  for track in gpx.tracks:
+    numTracks = numTracks + 1
+    for segment in track.segments:
+      for point in segment.points:
         print('Point at ({0},{1}) -> {2}'.format(point.latitude, point.longitude, point.elevation))
-    
-    print('Num tracks {}\r\nNum waypoints {}\r\nNum routes {}'.format(numTracks, numWPts, numRtes))
-    
-    if numWPts > 0:
-      WaypointConvert(gpx.waypoints, outfile, rtefile)
-    # There are many more utility methods and functions:
-    # You can manipulate/add/remove tracks, segments, points, waypoints and routes and
-    # get the GPX XML file from the resulting object:
-    
-    #print('GPX:', gpx.to_xml())
+  
+  for waypoint in gpx.waypoints:
+    numWPts = numWPts + 1
+    print('waypoint {0} -> ({1},{2}) {3}'.format(waypoint.name, waypoint.latitude, waypoint.longitude, waypoint.description))
+  
+  for route in gpx.routes:
+    print('Route:')
+    numRtes = numRtes + 1
+    for point in route.points:
+      print('Point at ({0},{1}) -> {2}'.format(point.latitude, point.longitude, point.elevation))
+  
+  print('Num tracks {}\r\nNum waypoints {}\r\nNum routes {}'.format(numTracks, numWPts, numRtes))
+  
+  if numWPts > 0:
+    WaypointConvert(gpx.waypoints, outfile, rtefile)
+  # There are many more utility methods and functions:
+  # You can manipulate/add/remove tracks, segments, points, waypoints and routes and
+  # get the GPX XML file from the resulting object:
+  
+  #print('GPX:', gpx.to_xml())
 
 
-    gpsdata = Gpsdata()
-    gpsdata.readWaypoints(infile)
-    cnt=0
-    for waypoint in gpsdata.wps:
-      print('class waypoint {0} -> ({1},{2}) {3}'.format(waypoint.name, waypoint.lat, waypoint.long, waypoint.desc))
-      cnt = cnt + 1
+  gpsdata = Gpsdata()
+  gpsdata.readWaypoints(infile)
+  cnt=0
+  for waypoint in gpsdata.wps:
+    print('class waypoint {0} -> ({1},{2}) {3}'.format(waypoint.name, waypoint.lat, waypoint.long, waypoint.desc))
+    cnt = cnt + 1
 
-    if rtefile:
-      gpsdata.readRoutes(rtefile)
-      for route in gpsdata.rts:
-        ln='class rte {0}:'.format(route.name)
-        for wp in route.routeWaypoints:
-          ln = ln + 'wp {0}/{1} - '.format(wp.name, wp.cyl)
-        print(ln)
+  if rtefile:
+    gpsdata.readRoutes(rtefile)
+    for route in gpsdata.rts:
+      ln='class rte {0}:'.format(route.name)
+      for wp in route.routeWaypoints:
+        ln = ln + 'wp {0}/{1} - '.format(wp['name'], wp['cyl'])
+      print(ln)
 
-
+  gpsdata.writeFormats(outfile, outfile)
 
 def main(argv=None): # IGNORE:C0111
     if argv is None:
