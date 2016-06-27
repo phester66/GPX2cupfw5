@@ -8,11 +8,102 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import gpxpy
 import gpxpy.gpx
+import math
 
 
 from argparse import ArgumentParser
 from argparse import RawDescriptionHelpFormatter
 from _ast import BitAnd
+
+class RouteWp:
+  pass
+
+class Waypoint:
+  def __init__(self, wp):
+    self.name = wp.name
+    self.lat = wp.latitude
+    self.long = wp.longitude
+    self.desc = wp.description
+    self.cyl = 400
+
+class Route:
+  def __init__(self, name, routeWaypoints):
+    self.name = name
+    self.routeWaypoints = routeWaypoints
+
+class Gpsdata(Waypoint, Route):
+  def __init__(self):
+    self.wps=[]
+    self.rts=[]
+  
+  def addWaypoint(self, wp):
+    self.wps.append(Waypoint(wp))
+  
+  def addRoute(self, name, defCyl, rtewps):
+    rte = []
+    for fullwp in rtewps:
+      wp=RouteWp
+      wp.cyl = defCyl
+      wpBits=fullwp.split('|')
+      wp.name = wpBits[0]
+      if len(wpBits) > 1:
+        wp.cyl = wpBits[1]
+      if wp.cyl == '':
+        wp.cyl = 400
+      rte.append(wp)
+    self.rts.append(Route(name, rte))
+  
+  
+  def readWaypoints(self, infile):
+    gpx_file = open(infile, 'r')
+    gpx = gpxpy.parse(gpx_file)
+    gpx_file.close()
+    
+    for waypoint in gpx.waypoints:
+      self.addWaypoint(waypoint)
+
+  def readRoutes(self, rtefile):
+    used = {}
+    err = False
+    compAdded = False
+    print('add routes')
+    with open(rtefile) as rte:
+      routes = rte.readlines()
+    for route in routes:
+      route = route.rstrip()
+      name=None
+      isComp = False
+      defCyl=None
+      print('route is {}'.format(route))
+      parts = route.split(';')
+      if len(parts) == 3:
+        name = parts[0]
+        if name[0] == '*':
+          isComp = True
+          name = name[1:]
+        defCyl = parts[1]
+        waypoints = parts[2].split('-')
+        if name in used:
+          print('used route name {}'.format(name))
+        else:
+          used[name]=True
+          self.addRoute(name, defCyl, waypoints)
+        if isComp == True:
+          name = 'COMPETITION-ROUTE'
+          if name in used:
+            print('used route name {}'.format(name))
+          else:
+            used[name]=True
+            compAdded = True
+            self.addRoute(name, defCyl, waypoints)
+          
+        if err==True:
+          print('##Error')
+          break
+    if compAdded == False:
+      print('#### Warning - no comp route - first one will be overwritten')
+
+
 
 def AddWaypoints(tagroot, wps):
   for waypoint in wps:
@@ -36,6 +127,21 @@ def AddRoute(tagroot, name, defCyl, waypoints, wps):
       wp = wpBits[0]
       if len(wpBits) > 1:
         cyl = wpBits[1]
+      tagtsk = ET.Element('Task')
+      tagtsk.attrib['fai_finish'] = str(0)
+      tagtsk.attrib['finish_min_height_ref'] = 'AGL'
+      tagtsk.attrib['finish_min_height'] = str(0)
+      tagtsk.attrib['start_max_height_ref'] = str('AGL')
+      tagtsk.attrib['start_max_height'] = str(0)
+      tagtsk.attrib['start_max_speed'] = str(0)
+      tagtsk.attrib['start_requires_arm'] = str(0)
+      tagtsk.attrib['aat_min_time'] = str(10800)
+      tagtsk.attrib['type'] = 'RT'
+      reparsed = minidom.parseString(ET.tostring(tagtsk,'unicode'))
+      tskfile = open(name+'.tsk','w')
+      tskfile.write(reparsed.toprettyxml(indent='  ', newl='\n'))
+      tskfile.close()
+
       #find name
       for waypoint in wps:
         if wp.lower() == waypoint.name.lower():
@@ -92,10 +198,33 @@ def AddRoutes(tagroot, rtefilename, wps):
   if compAdded == False:
     print('#### Warning - no comp route - first one will be overwritten')
              
-  
+def cupWrite(wps, cupFile):
+  print(cupFile)
+  # open cupFile
+  cupf = open(cupFile+'.cup', 'w')
+  cupf.write('name,code,country,lat,lon,elev,style,rwdir,rwlen,freq,desc\n')
+  for wpt in wps:
+    latFrac, latInt = math.modf(wpt.latitude)
+    longFrac, longInt = math.modf(wpt.longitude)
+    if latInt < 0:
+      latStr = 'S'
+      latInt = -latInt
+      latFrac = -latFrac
+    else:
+      latStr = 'N'
+    if longInt < 0:
+      longStr = 'W'
+      longInt = -longInt
+      longFrac = -longFrac
+    else:
+      longStr = 'E'
+    print('"{}-{}","{}",,{:02.0f}{:06.3f}{},{:03.0f}{:06.3f}{},{}m,1,,,,'.format(wpt.name, wpt.description, wpt.name, latInt,latFrac*60,latStr, longInt, longFrac*60, longStr, wpt.elevation))
+    cupf.write('"{}-{}","{}",,{:02.0f}{:06.3f}{},{:03.0f}{:06.3f}{},{}m,1,,,,\n'.format(wpt.name, wpt.description, wpt.name, latInt,latFrac*60,latStr, longInt, longFrac*60, longStr, wpt.elevation))
+  #close cupFile
+  cupf.close()
 
 def WaypointConvert(wps, outfile, rtefilename):
-  braun = open(outfile, 'w')
+  braun = open(outfile+'.fw5', 'w')
   nsm = {'xmlns': "http://www.topografix.com/GPX/1/1/",
          'version': "1.0",
          'xmlns:xsi':"http://www.w3.org/2001/XMLSchema-instance",
@@ -114,7 +243,7 @@ def WaypointConvert(wps, outfile, rtefilename):
   #a = ET.Element('gpx', xmlns="http://www.topografix.com/GPX/1/1/",version="1.0", xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance",xsi:schemaLocation="http://www.topografix.com/GPX/1/1/ http://www.topografix.com/GPX/1/1//gpx.xsd",creator="FlyChart, Version 4.57, Sep. 1st 2014 - http://www.flytec.ch")
   #ET.SubElement(a, '<gpx xmlns="http://www.topografix.com/GPX/1/1/" version="1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1/ http://www.topografix.com/GPX/1/1//gpx.xsd" creator="FlyChart, Version 4.57, Sep. 1st 2014 - http://www.flytec.ch">\n'
   braun.close()
-  
+  cupWrite(wps, outfile)
 
 
 def GpxStuff(infile, outfile, rtefile):
@@ -152,9 +281,20 @@ def GpxStuff(infile, outfile, rtefile):
     #print('GPX:', gpx.to_xml())
 
 
+    gpsdata = Gpsdata()
+    gpsdata.readWaypoints(infile)
+    cnt=0
+    for waypoint in gpsdata.wps:
+      print('class waypoint {0} -> ({1},{2}) {3}'.format(waypoint.name, waypoint.lat, waypoint.long, waypoint.desc))
+      cnt = cnt + 1
 
-
-
+    if rtefile:
+      gpsdata.readRoutes(rtefile)
+      for route in gpsdata.rts:
+        ln='class rte {0}:'.format(route.name)
+        for wp in route.routeWaypoints:
+          ln = ln + 'wp {0}/{1} - '.format(wp.name, wp.cyl)
+        print(ln)
 
 
 
